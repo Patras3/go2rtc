@@ -123,7 +123,7 @@ func (c *Conn) Handle() (err error) {
 
 	case core.ModePassiveConsumer:
 		// pushing frames to remote RTSP Client (ex VLC)
-		timeout = time.Second * 60
+		timeout = time.Second * 100
 
 	default:
 		return fmt.Errorf("wrong RTSP conn mode: %d", c.mode)
@@ -334,7 +334,7 @@ func (c *Conn) WriteResponse(res *tcp.Response) error {
 
 	if c.session != "" {
 		if res.Request != nil && res.Request.Method == MethodSetup {
-			res.Header.Set("Session", c.session+";timeout=60")
+			res.Header.Set("Session", c.session+";timeout=604800")
 		} else {
 			res.Header.Set("Session", c.session)
 		}
