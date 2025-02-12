@@ -334,7 +334,7 @@ func (c *Conn) WriteResponse(res *tcp.Response) error {
 
 	if c.session != "" {
 		if res.Request != nil && res.Request.Method == MethodSetup {
-			res.Header.Set("Session", c.session+";timeout=604800")
+			res.Header.Set("Session", c.session+";timeout=86400")
 		} else {
 			res.Header.Set("Session", c.session)
 		}
