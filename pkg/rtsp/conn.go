@@ -21,8 +21,6 @@ type Conn struct {
 	core.Connection
 	core.Listener
 
-	// public
-
 	Backchannel bool
 	Media       string
 	OnClose     func() error
@@ -32,8 +30,6 @@ type Conn struct {
 	Transport   string // custom transport support, ex. RTSP over WebSocket
 
 	URL *url.URL
-
-	// internal
 
 	auth      *tcp.Auth
 	conn      net.Conn
@@ -48,6 +44,9 @@ type Conn struct {
 	state   State
 	stateMu sync.Mutex
 }
+
+// Hardcode our total timeout for reads/writes to 24h
+const HardcodedTimeout = 24 * time.Hour
 
 const (
 	ProtoRTSP      = "RTSP/1.0"
@@ -68,7 +67,6 @@ func (s State) String() string {
 	case StateNone:
 		return "NONE"
 	case StateConn:
-
 		return "CONN"
 	case StateSetup:
 		return MethodSetup
@@ -86,7 +84,9 @@ const (
 )
 
 func (c *Conn) Handle() (err error) {
-	var timeout time.Duration
+	// We always use 24h as the read deadline
+	// Keepalive logic can remain unchanged
+	var timeout = HardcodedTimeout
 
 	var keepaliveDT time.Duration
 	var keepaliveTS time.Time
@@ -100,35 +100,15 @@ func (c *Conn) Handle() (err error) {
 		}
 		keepaliveTS = time.Now().Add(keepaliveDT)
 
-		if c.Timeout == 0 {
-			// polling frames from remote RTSP Server (ex Camera)
-			timeout = time.Second * 100
-
-			if len(c.Receivers) == 0 {
-				// if we only send audio to camera
-				// https://github.com/AlexxIT/go2rtc/issues/659
-				timeout += keepaliveDT
-			}
-		} else {
-			timeout = time.Second * time.Duration(c.Timeout)
-		}
-
 	case core.ModePassiveProducer:
-		// polling frames from remote RTSP Client (ex FFmpeg)
-		if c.Timeout == 0 {
-			timeout = time.Second * 100
-		} else {
-			timeout = time.Second * time.Duration(c.Timeout)
-		}
-
+		// No specialized logic for c.Timeout.
 	case core.ModePassiveConsumer:
-		// pushing frames to remote RTSP Client (ex VLC) #recently-changed!
-		timeout = time.Second * 100
-
+		// No specialized logic for c.Timeout.
 	default:
 		return fmt.Errorf("wrong RTSP conn mode: %d", c.mode)
 	}
 
+	// Read RTSP data in a loop until state = StateNone
 	for c.state != StateNone {
 		ts := time.Now()
 
@@ -136,12 +116,8 @@ func (c *Conn) Handle() (err error) {
 			return
 		}
 
-		// we can read:
-		// 1. RTP interleaved: `$` + 1B channel number + 2B size
-		// 2. RTSP response:   RTSP/1.0 200 OK
-		// 3. RTSP request:    OPTIONS ...
-		var buf4 []byte // `$` + 1B channel number + 2B size
-		buf4, err = c.reader.Peek(4)
+		// Peek 4 bytes to distinguish between '$' (RTP interleaved) or RTSP messages
+		buf4, err := c.reader.Peek(4)
 		if err != nil {
 			return
 		}
@@ -179,51 +155,37 @@ func (c *Conn) Handle() (err error) {
 				c.Fire("RTSP wrong input")
 
 				for i := 0; ; i++ {
-					// search next start symbol
+					// search next '$' start symbol
 					if _, err = c.reader.ReadBytes('$'); err != nil {
 						return err
 					}
-
 					if channelID, err = c.reader.ReadByte(); err != nil {
 						return err
 					}
-
-					// TODO: better check maximum good channel ID
 					if channelID >= 20 {
 						continue
 					}
-
 					buf4 = make([]byte, 2)
 					if _, err = io.ReadFull(c.reader, buf4); err != nil {
 						return err
 					}
-
-					// check if size good for RTP
 					size = binary.BigEndian.Uint16(buf4)
 					if size <= 1500 {
 						break
 					}
-
-					// 10 tries to find good packet
 					if i >= 10 {
 						return fmt.Errorf("RTSP wrong input")
 					}
 				}
 			}
 		} else {
-			// hope that the odd channels are always RTCP
 			channelID = buf4[1]
-
-			// get data size
 			size = binary.BigEndian.Uint16(buf4[2:])
-
-			// skip 4 bytes from c.reader.Peek
 			if _, err = c.reader.Discard(4); err != nil {
 				return
 			}
 		}
 
-		// init memory for data
 		buf := make([]byte, size)
 		if _, err = io.ReadFull(c.reader, buf); err != nil {
 			return
@@ -236,7 +198,6 @@ func (c *Conn) Handle() (err error) {
 			if err = packet.Unmarshal(buf); err != nil {
 				return
 			}
-
 			for _, receiver := range c.Receivers {
 				if receiver.ID == channelID {
 					receiver.WriteRTP(packet)
@@ -245,25 +206,22 @@ func (c *Conn) Handle() (err error) {
 			}
 		} else {
 			msg := &RTCP{Channel: channelID}
-
 			if err = msg.Header.Unmarshal(buf); err != nil {
 				continue
 			}
-
 			msg.Packets, err = rtcp.Unmarshal(buf)
 			if err != nil {
 				continue
 			}
-
 			c.Fire(msg)
 		}
 
+		// send keepalive if needed
 		if keepaliveDT != 0 && ts.After(keepaliveTS) {
 			req := &tcp.Request{Method: MethodOptions, URL: c.URL}
 			if err = c.WriteRequest(req); err != nil {
 				return
 			}
-
 			keepaliveTS = ts.Add(keepaliveDT)
 		}
 	}
@@ -275,38 +233,30 @@ func (c *Conn) WriteRequest(req *tcp.Request) error {
 	if req.Proto == "" {
 		req.Proto = ProtoRTSP
 	}
-
 	if req.Header == nil {
 		req.Header = make(map[string][]string)
 	}
 
 	c.sequence++
-	// important to send case sensitive CSeq
-	// https://github.com/AlexxIT/go2rtc/issues/7
 	req.Header["CSeq"] = []string{strconv.Itoa(c.sequence)}
-
 	c.auth.Write(req)
 
 	if c.session != "" {
 		req.Header.Set("Session", c.session)
 	}
-
 	if req.Body != nil {
-		val := strconv.Itoa(len(req.Body))
-		req.Header.Set("Content-Length", val)
+		req.Header.Set("Content-Length", strconv.Itoa(len(req.Body)))
 	}
-
 	c.Fire(req)
 
-	if err := c.conn.SetWriteDeadline(time.Now().Add(Timeout)); err != nil {
+	if err := c.conn.SetWriteDeadline(time.Now().Add(HardcodedTimeout)); err != nil {
 		return err
 	}
-
 	return req.Write(c.conn)
 }
 
 func (c *Conn) ReadRequest() (*tcp.Request, error) {
-	if err := c.conn.SetReadDeadline(time.Now().Add(Timeout)); err != nil {
+	if err := c.conn.SetReadDeadline(time.Now().Add(HardcodedTimeout)); err != nil {
 		return nil, err
 	}
 	return tcp.ReadRequest(c.reader)
@@ -316,11 +266,9 @@ func (c *Conn) WriteResponse(res *tcp.Response) error {
 	if res.Proto == "" {
 		res.Proto = ProtoRTSP
 	}
-
 	if res.Status == "" {
 		res.Status = "200 OK"
 	}
-
 	if res.Header == nil {
 		res.Header = make(map[string][]string)
 	}
@@ -332,30 +280,24 @@ func (c *Conn) WriteResponse(res *tcp.Response) error {
 		}
 	}
 
+	// Always include ';timeout=86400' in Session header if we have a session
 	if c.session != "" {
-		if res.Request != nil && res.Request.Method == MethodSetup {
-			res.Header.Set("Session", c.session+";timeout=86400")
-		} else {
-			res.Header.Set("Session", c.session)
-		}
+		res.Header.Set("Session", c.session+";timeout=86400")
 	}
 
 	if res.Body != nil {
-		val := strconv.Itoa(len(res.Body))
-		res.Header.Set("Content-Length", val)
+		res.Header.Set("Content-Length", strconv.Itoa(len(res.Body)))
 	}
-
 	c.Fire(res)
 
-	if err := c.conn.SetWriteDeadline(time.Now().Add(Timeout)); err != nil {
+	if err := c.conn.SetWriteDeadline(time.Now().Add(HardcodedTimeout)); err != nil {
 		return err
 	}
-
 	return res.Write(c.conn)
 }
 
 func (c *Conn) ReadResponse() (*tcp.Response, error) {
-	if err := c.conn.SetReadDeadline(time.Now().Add(Timeout)); err != nil {
+	if err := c.conn.SetReadDeadline(time.Now().Add(HardcodedTimeout)); err != nil {
 		return nil, err
 	}
 	return tcp.ReadResponse(c.reader)
