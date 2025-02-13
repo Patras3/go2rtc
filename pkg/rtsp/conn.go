@@ -45,7 +45,7 @@ type Conn struct {
 	stateMu sync.Mutex
 }
 
-// Hardcode our total timeout for reads/writes to 24h
+// Hardcode total timeout for reads/writes to 24h
 const HardcodedTimeout = 24 * time.Hour
 
 const (
@@ -83,10 +83,9 @@ const (
 	StatePlay
 )
 
-func (c *Conn) Handle() (err error) {
-	// We always use 24h as the read deadline
-	// Keepalive logic can remain unchanged
-	var timeout = HardcodedTimeout
+func (c *Conn) Handle() error {
+	// Always use 24h for read deadlines
+	timeout := HardcodedTimeout
 
 	var keepaliveDT time.Duration
 	var keepaliveTS time.Time
@@ -101,25 +100,24 @@ func (c *Conn) Handle() (err error) {
 		keepaliveTS = time.Now().Add(keepaliveDT)
 
 	case core.ModePassiveProducer:
-		// No specialized logic for c.Timeout.
+		// No specialized logic now; always 24h.
 	case core.ModePassiveConsumer:
-		// No specialized logic for c.Timeout.
+		// No specialized logic now; always 24h.
 	default:
 		return fmt.Errorf("wrong RTSP conn mode: %d", c.mode)
 	}
 
-	// Read RTSP data in a loop until state = StateNone
 	for c.state != StateNone {
 		ts := time.Now()
 
-		if err = c.conn.SetReadDeadline(ts.Add(timeout)); err != nil {
-			return
+		if err := c.conn.SetReadDeadline(ts.Add(timeout)); err != nil {
+			return err
 		}
 
-		// Peek 4 bytes to distinguish between '$' (RTP interleaved) or RTSP messages
+		// Peek 4 bytes to distinguish between '$' (interleaved RTP) or RTSP messages
 		buf4, err := c.reader.Peek(4)
 		if err != nil {
-			return
+			return err
 		}
 
 		var channelID byte
@@ -128,25 +126,25 @@ func (c *Conn) Handle() (err error) {
 		if buf4[0] != '$' {
 			switch string(buf4) {
 			case "RTSP":
-				var res *tcp.Response
-				if res, err = c.ReadResponse(); err != nil {
-					return
+				res, err2 := c.ReadResponse()
+				if err2 != nil {
+					return err2
 				}
 				c.Fire(res)
-				// for playing backchannel only after OK response on play
+				// For playing backchannel only after OK response on play
 				c.playOK = true
 				continue
 
 			case "OPTI", "TEAR", "DESC", "SETU", "PLAY", "PAUS", "RECO", "ANNO", "GET_", "SET_":
-				var req *tcp.Request
-				if req, err = c.ReadRequest(); err != nil {
-					return
+				req, err2 := c.ReadRequest()
+				if err2 != nil {
+					return err2
 				}
 				c.Fire(req)
 				if req.Method == MethodOptions {
 					res := &tcp.Response{Request: req}
-					if err = c.WriteResponse(res); err != nil {
-						return
+					if err2 = c.WriteResponse(res); err2 != nil {
+						return err2
 					}
 				}
 				continue
@@ -155,21 +153,23 @@ func (c *Conn) Handle() (err error) {
 				c.Fire("RTSP wrong input")
 
 				for i := 0; ; i++ {
-					// search next '$' start symbol
-					if _, err = c.reader.ReadBytes('$'); err != nil {
-						return err
+					// search next '$'
+					_, err2 := c.reader.ReadBytes('$')
+					if err2 != nil {
+						return err2
 					}
-					if channelID, err = c.reader.ReadByte(); err != nil {
-						return err
+					channelID, err2 = c.reader.ReadByte()
+					if err2 != nil {
+						return err2
 					}
 					if channelID >= 20 {
 						continue
 					}
-					buf4 = make([]byte, 2)
-					if _, err = io.ReadFull(c.reader, buf4); err != nil {
-						return err
+					buf2 := make([]byte, 2)
+					if _, err2 = io.ReadFull(c.reader, buf2); err2 != nil {
+						return err2
 					}
-					size = binary.BigEndian.Uint16(buf4)
+					size = binary.BigEndian.Uint16(buf2)
 					if size <= 1500 {
 						break
 					}
@@ -181,22 +181,23 @@ func (c *Conn) Handle() (err error) {
 		} else {
 			channelID = buf4[1]
 			size = binary.BigEndian.Uint16(buf4[2:])
-			if _, err = c.reader.Discard(4); err != nil {
-				return
+			if _, err := c.reader.Discard(4); err != nil {
+				return err
 			}
 		}
 
 		buf := make([]byte, size)
-		if _, err = io.ReadFull(c.reader, buf); err != nil {
-			return
+		if _, err := io.ReadFull(c.reader, buf); err != nil {
+			return err
 		}
 
 		c.Recv += int(size)
 
 		if channelID&1 == 0 {
+			// even channel => RTP
 			packet := &rtp.Packet{}
-			if err = packet.Unmarshal(buf); err != nil {
-				return
+			if err := packet.Unmarshal(buf); err != nil {
+				return err
 			}
 			for _, receiver := range c.Receivers {
 				if receiver.ID == channelID {
@@ -205,28 +206,30 @@ func (c *Conn) Handle() (err error) {
 				}
 			}
 		} else {
+			// odd channel => RTCP
 			msg := &RTCP{Channel: channelID}
-			if err = msg.Header.Unmarshal(buf); err != nil {
+			if err := msg.Header.Unmarshal(buf); err != nil {
 				continue
 			}
-			msg.Packets, err = rtcp.Unmarshal(buf)
-			if err != nil {
+			var err2 error
+			msg.Packets, err2 = rtcp.Unmarshal(buf)
+			if err2 != nil {
 				continue
 			}
 			c.Fire(msg)
 		}
 
-		// send keepalive if needed
+		// keepalive if needed
 		if keepaliveDT != 0 && ts.After(keepaliveTS) {
 			req := &tcp.Request{Method: MethodOptions, URL: c.URL}
-			if err = c.WriteRequest(req); err != nil {
-				return
+			if err := c.WriteRequest(req); err != nil {
+				return err
 			}
 			keepaliveTS = ts.Add(keepaliveDT)
 		}
 	}
 
-	return
+	return nil
 }
 
 func (c *Conn) WriteRequest(req *tcp.Request) error {
@@ -272,19 +275,16 @@ func (c *Conn) WriteResponse(res *tcp.Response) error {
 	if res.Header == nil {
 		res.Header = make(map[string][]string)
 	}
-
 	if res.Request != nil && res.Request.Header != nil {
 		seq := res.Request.Header.Get("CSeq")
 		if seq != "" {
 			res.Header.Set("CSeq", seq)
 		}
 	}
-
-	// Always include ';timeout=86400' in Session header if we have a session
+	// Always append ;timeout=86400 if there's a session
 	if c.session != "" {
 		res.Header.Set("Session", c.session+";timeout=86400")
 	}
-
 	if res.Body != nil {
 		res.Header.Set("Content-Length", strconv.Itoa(len(res.Body)))
 	}
