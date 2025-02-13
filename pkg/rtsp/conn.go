@@ -102,7 +102,7 @@ func (c *Conn) Handle() (err error) {
 
 		if c.Timeout == 0 {
 			// polling frames from remote RTSP Server (ex Camera)
-			timeout = time.Second * 5
+			timeout = time.Second * 100
 
 			if len(c.Receivers) == 0 {
 				// if we only send audio to camera
@@ -123,7 +123,7 @@ func (c *Conn) Handle() (err error) {
 
 	case core.ModePassiveConsumer:
 		// pushing frames to remote RTSP Client (ex VLC) #recently-changed!
-		timeout = time.Second * 60
+		timeout = time.Second * 100
 
 	default:
 		return fmt.Errorf("wrong RTSP conn mode: %d", c.mode)
