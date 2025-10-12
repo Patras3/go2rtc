@@ -125,20 +125,40 @@ func rtspHandler(rawURL string) (core.Producer, error) {
 		conn.Media = query.Get("media")
 		conn.Timeout = core.Atoi(query.Get("timeout"))
 		conn.Transport = query.Get("transport")
+
+		// Log timeout parsing for debugging
+		if timeoutStr := query.Get("timeout"); timeoutStr != "" {
+			log.Warn().
+				Str("url", rawURL).
+				Int("timeout", conn.Timeout).
+				Msg("[QVR-CLIENT] Timeout parameter parsed from producer URL")
+		} else {
+			log.Warn().
+				Str("url", rawURL).
+				Msg("[QVR-CLIENT] No timeout parameter in producer URL")
+		}
 	}
 
-	if log.Trace().Enabled() {
-		conn.Listen(func(msg any) {
-			switch msg := msg.(type) {
-			case *tcp.Request:
-				log.Trace().Msgf("[rtsp] client request:\n%s", msg)
-			case *tcp.Response:
-				log.Trace().Msgf("[rtsp] client response:\n%s", msg)
-			case string:
+	// Always register a listener for QVR debug messages
+	conn.Listen(func(msg any) {
+		switch msg := msg.(type) {
+		case string:
+			// Log QVR-specific messages at WARN level for visibility
+			if strings.HasPrefix(msg, "[QVR-") || strings.HasPrefix(msg, "[RTSP]") {
+				log.Warn().Msgf("%s", msg)
+			} else if log.Trace().Enabled() {
 				log.Trace().Msgf("[rtsp] client msg: %s", msg)
 			}
-		})
-	}
+		case *tcp.Request:
+			if log.Trace().Enabled() {
+				log.Trace().Msgf("[rtsp] client request:\n%s", msg)
+			}
+		case *tcp.Response:
+			if log.Trace().Enabled() {
+				log.Trace().Msgf("[rtsp] client response:\n%s", msg)
+			}
+		}
+	})
 
 	if err := conn.Dial(); err != nil {
 		return nil, err
