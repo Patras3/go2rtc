@@ -95,17 +95,31 @@ func (c *Conn) Handle() (err error) {
 	case core.ModeActiveProducer:
 		var keepaliveDT time.Duration
 
-		if c.keepalive > 5 {
-			keepaliveDT = time.Duration(c.keepalive-5) * time.Second
+		// If user specified a timeout (e.g., for QVR cameras that don't handle keepalive properly),
+		// use it to calculate an appropriate keepalive interval
+		if c.Timeout > 0 {
+			// Use user-specified timeout as the inactivity timeout
+			timeout = time.Second * time.Duration(c.Timeout)
+
+			// Send keepalive at half the timeout interval to prevent disconnection
+			// This ensures we stay well within the timeout window
+			if c.Timeout > 10 {
+				keepaliveDT = time.Duration(c.Timeout/2) * time.Second
+			} else {
+				// For very short timeouts, use a more aggressive keepalive
+				keepaliveDT = time.Duration(c.Timeout-2) * time.Second
+				if keepaliveDT < time.Second {
+					keepaliveDT = time.Second
+				}
+			}
 		} else {
-			keepaliveDT = 25 * time.Second
-		}
+			// Use camera-provided keepalive value from Session header
+			if c.keepalive > 5 {
+				keepaliveDT = time.Duration(c.keepalive-5) * time.Second
+			} else {
+				keepaliveDT = 25 * time.Second
+			}
 
-		ctx, cancel := context.WithCancel(context.Background())
-		go c.handleKeepalive(ctx, keepaliveDT)
-		defer cancel()
-
-		if c.Timeout == 0 {
 			// polling frames from remote RTSP Server (ex Camera)
 			timeout = time.Second * 5
 
@@ -114,9 +128,11 @@ func (c *Conn) Handle() (err error) {
 				// https://github.com/AlexxIT/go2rtc/issues/659
 				timeout += keepaliveDT
 			}
-		} else {
-			timeout = time.Second * time.Duration(c.Timeout)
 		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		go c.handleKeepalive(ctx, keepaliveDT)
+		defer cancel()
 
 	case core.ModePassiveProducer:
 		// polling frames from remote RTSP Client (ex FFmpeg)
@@ -153,14 +169,20 @@ func (c *Conn) Handle() (err error) {
 
 func (c *Conn) handleKeepalive(ctx context.Context, d time.Duration) {
 	ticker := time.NewTicker(d)
+	defer ticker.Stop()
+
+	c.Fire(fmt.Sprintf("RTSP keepalive started, interval: %v", d))
+
 	for {
 		select {
 		case <-ticker.C:
 			req := &tcp.Request{Method: MethodOptions, URL: c.URL}
 			if err := c.WriteRequest(req); err != nil {
+				c.Fire(fmt.Sprintf("RTSP keepalive failed: %v", err))
 				return
 			}
 		case <-ctx.Done():
+			c.Fire("RTSP keepalive stopped")
 			return
 		}
 	}
