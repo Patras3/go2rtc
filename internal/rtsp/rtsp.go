@@ -93,14 +93,34 @@ var handlers []Handler
 var defaultMedias []*core.Media
 
 func rtspHandler(rawURL string) (core.Producer, error) {
+	// Support both query string (?timeout=100) for QVR and hash (#timeout=100) for Frigate
+	// Parse standard query string first (before #)
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get query parameters from both sources
+	query := parsedURL.Query()
+
+	// Also support hash-based parameters (go2rtc/Frigate style)
 	rawURL, rawQuery, _ := strings.Cut(rawURL, "#")
+	if rawQuery != "" {
+		hashQuery := streams.ParseQuery(rawQuery)
+		// Merge hash parameters into query (hash takes precedence)
+		for key, values := range hashQuery {
+			for _, value := range values {
+				query.Set(key, value)
+			}
+		}
+	}
 
 	conn := rtsp.NewClient(rawURL)
 	conn.Backchannel = true
 	conn.UserAgent = app.UserAgent
 
-	if rawQuery != "" {
-		query := streams.ParseQuery(rawQuery)
+	// Apply parameters from merged query
+	if len(query) > 0 {
 		conn.Backchannel = query.Get("backchannel") == "1"
 		conn.Media = query.Get("media")
 		conn.Timeout = core.Atoi(query.Get("timeout"))
