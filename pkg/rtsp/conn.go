@@ -147,8 +147,10 @@ func (c *Conn) Handle() (err error) {
 		}
 
 	case core.ModePassiveConsumer:
-		// pushing frames to remote RTSP Client (ex VLC)
-		timeout = time.Second * 60
+		// pushing frames to remote RTSP Client (ex QVR/VLC)
+		// Set to 5 minutes to auto-cleanup inactive connections
+		// (Session timeout is 24h, but we cleanup earlier to prevent accumulation)
+		timeout = time.Second * 300
 
 	default:
 		return fmt.Errorf("wrong RTSP conn mode: %d", c.mode)
@@ -412,13 +414,14 @@ func (c *Conn) WriteResponse(res *tcp.Response) error {
 	if c.session != "" {
 		if res.Request != nil && res.Request.Method == MethodSetup {
 			// Use user-specified timeout if available (for QVR compatibility)
-			// Otherwise default to 60 seconds
-			sessionTimeout := 60
+			// Otherwise default to 24h to prevent QVR from disconnecting
+			// (actual cleanup happens via read timeout in Handle())
+			sessionTimeout := 86400 // 24 hours
 			if c.Timeout > 0 {
 				sessionTimeout = c.Timeout
 				c.Fire(fmt.Sprintf("[QVR-FIX] Setting Session timeout=%d (from c.Timeout)", sessionTimeout))
 			} else {
-				c.Fire(fmt.Sprintf("[QVR-DEFAULT] Setting Session timeout=%d (default)", sessionTimeout))
+				c.Fire(fmt.Sprintf("[QVR-DEFAULT] Setting Session timeout=%d (24h default)", sessionTimeout))
 			}
 			res.Header.Set("Session", fmt.Sprintf("%s;timeout=%d", c.session, sessionTimeout))
 		} else {
