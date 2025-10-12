@@ -13,11 +13,13 @@ ARG TARGETARCH
 # - tini: proper init system for containers
 # - ffmpeg: video processing support for go2rtc
 # - curl: for health checks and API calls in vrrp_notify script
+# - bash: required for entrypoint and vrrp_notify scripts
 RUN apk add --no-cache \
     keepalived \
     tini \
     ffmpeg \
-    curl
+    curl \
+    bash
 
 # Install Intel hardware acceleration drivers (only for amd64)
 # These enable hardware-accelerated video encoding/decoding on Intel CPUs
