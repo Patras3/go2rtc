@@ -411,7 +411,16 @@ func (c *Conn) WriteResponse(res *tcp.Response) error {
 
 	if c.session != "" {
 		if res.Request != nil && res.Request.Method == MethodSetup {
-			res.Header.Set("Session", c.session+";timeout=60")
+			// Use user-specified timeout if available (for QVR compatibility)
+			// Otherwise default to 60 seconds
+			sessionTimeout := 60
+			if c.Timeout > 0 {
+				sessionTimeout = c.Timeout
+				c.Fire(fmt.Sprintf("[QVR-FIX] Setting Session timeout=%d (from c.Timeout)", sessionTimeout))
+			} else {
+				c.Fire(fmt.Sprintf("[QVR-DEFAULT] Setting Session timeout=%d (default)", sessionTimeout))
+			}
+			res.Header.Set("Session", fmt.Sprintf("%s;timeout=%d", c.session, sessionTimeout))
 		} else {
 			res.Header.Set("Session", c.session)
 		}
