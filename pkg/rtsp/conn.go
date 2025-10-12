@@ -15,6 +15,7 @@ import (
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/tcp"
 	"github.com/pion/rtp"
+	"github.com/rs/zerolog/log"
 )
 
 type Conn struct {
@@ -144,12 +145,14 @@ func (c *Conn) Handle() (err error) {
 
 	case core.ModePassiveConsumer:
 		// pushing frames to remote RTSP Client (ex QVR/VLC)
-		// Use c.Timeout if specified, otherwise 30 minutes
+		// Use c.Timeout if specified, otherwise 7 days
 		// (QVR may use UDP for RTP, so TCP has no activity for keepalive)
 		if c.Timeout > 0 {
 			timeout = time.Second * time.Duration(c.Timeout)
+			log.Warn().Msgf("[rtsp] PassiveConsumer connection started with custom timeout: %d seconds (%.1f hours) - URL: %s", c.Timeout, float64(c.Timeout)/3600, c.URL)
 		} else {
-			timeout = time.Second * 1800 // 30 minutes default
+			timeout = time.Second * 604800 // 7 days default (increased from 30 minutes for QVR monitoring)
+			log.Warn().Msgf("[rtsp] PassiveConsumer connection started with default timeout: 604800 seconds (7 days) - URL: %s", c.URL)
 		}
 
 	default:
@@ -166,6 +169,9 @@ func (c *Conn) Handle() (err error) {
 		_ = c.conn.SetReadDeadline(ts.Add(timeout))
 
 		if err = c.handleTCPData(); err != nil {
+			if c.mode == core.ModePassiveConsumer {
+				log.Warn().Msgf("[rtsp] PassiveConsumer connection closed - URL: %s, Error: %v, Timeout was: %.1f hours", c.URL, err, timeout.Hours())
+			}
 			return
 		}
 	}
