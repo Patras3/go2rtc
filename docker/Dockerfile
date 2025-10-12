@@ -1,54 +1,60 @@
-# syntax=docker/dockerfile:labs
+# Dockerfile for go2rtc with keepalived support
+# This image combines go2rtc with keepalived for high availability setups
+# Requires keepalive configuration for HA mode
 
-# 0. Prepare images
-ARG PYTHON_VERSION="3.13"
-ARG GO_VERSION="1.25"
+# Use Python 3.11 Alpine as base (lightweight)
+FROM python:3.11-alpine
 
+# Build argument for target architecture (amd64, arm64, etc.)
+ARG TARGETARCH=amd64
 
-# 1. Build go2rtc binary
-FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
-ARG TARGETPLATFORM
-ARG TARGETOS
-ARG TARGETARCH
+# Install required packages
+# - keepalived: for VRRP high availability
+# - tini: proper init system for containers
+# - ffmpeg: video processing support for go2rtc
+# - curl: for health checks and API calls in vrrp_notify script
+RUN apk add --no-cache \
+    keepalived \
+    tini \
+    ffmpeg \
+    curl
 
-ENV GOOS=${TARGETOS}
-ENV GOARCH=${TARGETARCH}
+# Install Intel hardware acceleration drivers (only for amd64)
+# These enable hardware-accelerated video encoding/decoding on Intel CPUs
+RUN if [ "${TARGETARCH}" = "amd64" ]; then \
+      apk add --no-cache libva-intel-driver intel-media-driver; \
+    fi
 
-WORKDIR /build
+# Copy go2rtc binary
+# Note: Build go2rtc first with: CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath
+COPY go2rtc /usr/local/bin/go2rtc
+RUN chmod +x /usr/local/bin/go2rtc
 
-RUN apk add git
+# Copy entrypoint script (starts keepalived + go2rtc)
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Cache dependencies
-COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/root/.cache/go-build go mod download
+# Copy VRRP notification script (called by keepalived on state changes)
+COPY docker/vrrp_notify.sh /usr/local/bin/vrrp_notify.sh
+RUN chmod +x /usr/local/bin/vrrp_notify.sh
 
-COPY . .
-RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath
-
-
-# 2. Final image
-FROM python:${PYTHON_VERSION}-alpine AS base
-
-# Install ffmpeg, tini (for signal handling),
-# and other common tools for the echo source.
-# alsa-plugins-pulse for ALSA support (+0MB)
-# font-droid for FFmpeg drawtext filter (+2MB)
-RUN apk add --no-cache tini ffmpeg ffplay bash curl jq alsa-plugins-pulse font-droid
-
-# Hardware Acceleration for Intel CPU (+50MB)
-ARG TARGETARCH
-
-RUN if [ "${TARGETARCH}" = "amd64" ]; then apk add --no-cache libva-intel-driver intel-media-driver; fi
-
-# Hardware: AMD and NVidia VAAPI (not sure about this)
-# RUN libva-glx mesa-va-gallium
-# Hardware: AMD and NVidia VDPAU (not sure about this)
-# RUN libva-vdpau-driver mesa-vdpau-gallium (+150MB total)
-
-COPY --from=build /build/go2rtc /usr/local/bin/
-
-ENTRYPOINT ["/sbin/tini", "--"]
-VOLUME /config
+# Set working directory to /config
 WORKDIR /config
 
-CMD ["go2rtc", "-config", "/config/go2rtc.yaml"]
+# Create volume for persistent configuration
+# Expected files:
+# - /config/go2rtc.yaml (required - go2rtc configuration)
+# - /config/keepalived.conf (optional - for HA setup with keepalived)
+VOLUME ["/config"]
+
+# Use tini as init system (handles signals properly)
+# Then run entrypoint.sh which starts keepalived (if configured) and go2rtc
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+
+# Default command (empty, entrypoint handles everything)
+CMD []
+
+# Metadata
+LABEL maintainer="Patras3 <patrykdadas@gmail.com>"
+LABEL description="go2rtc with keepalived support for high availability setups. Requires keepalive configuration."
+LABEL org.opencontainers.image.source="https://github.com/Patras3/go2rtc"
