@@ -6,7 +6,7 @@
 FROM python:3.11-alpine
 
 # Build argument for target architecture (amd64, arm64, etc.)
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 
 # Install required packages
 # - keepalived: for VRRP high availability
@@ -21,8 +21,10 @@ RUN apk add --no-cache \
 
 # Install Intel hardware acceleration drivers (only for amd64)
 # These enable hardware-accelerated video encoding/decoding on Intel CPUs
+# Note: These packages only exist in x86_64 repos, skip for other architectures
 RUN if [ "${TARGETARCH}" = "amd64" ]; then \
-      apk add --no-cache libva-intel-driver intel-media-driver; \
+      apk add --no-cache --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community \
+      libva-intel-driver intel-media-driver || true; \
     fi
 
 # Copy go2rtc binary
