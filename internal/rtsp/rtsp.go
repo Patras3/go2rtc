@@ -200,10 +200,23 @@ func tcpHandler(conn *rtsp.Conn) {
 
 			query := conn.URL.Query()
 
+			log.Warn().
+				Str("stream", name).
+				Str("url", conn.URL.String()).
+				Str("query", conn.URL.RawQuery).
+				Msg("[QVR-DEBUG] DESCRIBE request received")
+
 			// Support timeout parameter for QVR and other RTSP clients
 			if s := query.Get("timeout"); s != "" {
 				conn.Timeout = core.Atoi(s)
-				log.Debug().Int("timeout", conn.Timeout).Msg("[rtsp] set timeout from URL")
+				log.Warn().
+					Int("timeout", conn.Timeout).
+					Str("stream", name).
+					Msg("[QVR-FIX] Timeout parameter parsed from URL query string")
+			} else {
+				log.Warn().
+					Str("stream", name).
+					Msg("[QVR-WARN] No timeout parameter in URL - using defaults")
 			}
 
 			conn.Medias = ParseQuery(query)
