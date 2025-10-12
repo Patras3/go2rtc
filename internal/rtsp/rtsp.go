@@ -199,6 +199,13 @@ func tcpHandler(conn *rtsp.Conn) {
 			conn.SessionName = app.UserAgent
 
 			query := conn.URL.Query()
+
+			// Support timeout parameter for QVR and other RTSP clients
+			if s := query.Get("timeout"); s != "" {
+				conn.Timeout = core.Atoi(s)
+				log.Debug().Int("timeout", conn.Timeout).Msg("[rtsp] set timeout from URL")
+			}
+
 			conn.Medias = ParseQuery(query)
 			if conn.Medias == nil {
 				for _, media := range defaultMedias {
