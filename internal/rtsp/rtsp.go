@@ -125,40 +125,20 @@ func rtspHandler(rawURL string) (core.Producer, error) {
 		conn.Media = query.Get("media")
 		conn.Timeout = core.Atoi(query.Get("timeout"))
 		conn.Transport = query.Get("transport")
-
-		// Log timeout parsing for debugging
-		if timeoutStr := query.Get("timeout"); timeoutStr != "" {
-			log.Warn().
-				Str("url", rawURL).
-				Int("timeout", conn.Timeout).
-				Msg("[QVR-CLIENT] Timeout parameter parsed from producer URL")
-		} else {
-			log.Warn().
-				Str("url", rawURL).
-				Msg("[QVR-CLIENT] No timeout parameter in producer URL")
-		}
 	}
 
-	// Always register a listener for QVR debug messages
-	conn.Listen(func(msg any) {
-		switch msg := msg.(type) {
-		case string:
-			// Log QVR-specific messages at WARN level for visibility
-			if strings.HasPrefix(msg, "[QVR-") || strings.HasPrefix(msg, "[RTSP]") {
-				log.Warn().Msgf("%s", msg)
-			} else if log.Trace().Enabled() {
+	if log.Trace().Enabled() {
+		conn.Listen(func(msg any) {
+			switch msg := msg.(type) {
+			case *tcp.Request:
+				log.Trace().Msgf("[rtsp] client request:\n%s", msg)
+			case *tcp.Response:
+				log.Trace().Msgf("[rtsp] client response:\n%s", msg)
+			case string:
 				log.Trace().Msgf("[rtsp] client msg: %s", msg)
 			}
-		case *tcp.Request:
-			if log.Trace().Enabled() {
-				log.Trace().Msgf("[rtsp] client request:\n%s", msg)
-			}
-		case *tcp.Response:
-			if log.Trace().Enabled() {
-				log.Trace().Msgf("[rtsp] client response:\n%s", msg)
-			}
-		}
-	})
+		})
+	}
 
 	if err := conn.Dial(); err != nil {
 		return nil, err
@@ -220,23 +200,9 @@ func tcpHandler(conn *rtsp.Conn) {
 
 			query := conn.URL.Query()
 
-			log.Warn().
-				Str("stream", name).
-				Str("url", conn.URL.String()).
-				Str("query", conn.URL.RawQuery).
-				Msg("[QVR-DEBUG] DESCRIBE request received")
-
 			// Support timeout parameter for QVR and other RTSP clients
 			if s := query.Get("timeout"); s != "" {
 				conn.Timeout = core.Atoi(s)
-				log.Warn().
-					Int("timeout", conn.Timeout).
-					Str("stream", name).
-					Msg("[QVR-FIX] Timeout parameter parsed from URL query string")
-			} else {
-				log.Warn().
-					Str("stream", name).
-					Msg("[QVR-WARN] No timeout parameter in URL - using defaults")
 			}
 
 			conn.Medias = ParseQuery(query)

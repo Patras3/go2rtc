@@ -95,8 +95,6 @@ func (c *Conn) Handle() (err error) {
 	case core.ModeActiveProducer:
 		var keepaliveDT time.Duration
 
-		c.Fire(fmt.Sprintf("[QVR-DEBUG] Handle() started: c.Timeout=%d, c.keepalive=%d", c.Timeout, c.keepalive))
-
 		// If user specified a timeout (e.g., for QVR cameras that don't handle keepalive properly),
 		// use it to calculate an appropriate keepalive interval
 		if c.Timeout > 0 {
@@ -114,7 +112,6 @@ func (c *Conn) Handle() (err error) {
 					keepaliveDT = time.Second
 				}
 			}
-			c.Fire(fmt.Sprintf("[QVR-FIX] Using user timeout: read_timeout=%v, keepalive_interval=%v", timeout, keepaliveDT))
 		} else {
 			// Use camera-provided keepalive value from Session header
 			if c.keepalive > 5 {
@@ -131,7 +128,6 @@ func (c *Conn) Handle() (err error) {
 				// https://github.com/AlexxIT/go2rtc/issues/659
 				timeout += keepaliveDT
 			}
-			c.Fire(fmt.Sprintf("[RTSP] Using default timeout: read_timeout=%v, keepalive_interval=%v", timeout, keepaliveDT))
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -181,22 +177,17 @@ func (c *Conn) handleKeepalive(ctx context.Context, d time.Duration) {
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 
-	c.Fire(fmt.Sprintf("[QVR-KEEPALIVE] Started keepalive loop, interval: %v", d))
 
 	keepaliveCount := 0
 	for {
 		select {
 		case <-ticker.C:
 			keepaliveCount++
-			c.Fire(fmt.Sprintf("[QVR-KEEPALIVE] Sending OPTIONS #%d (every %v)", keepaliveCount, d))
 			req := &tcp.Request{Method: MethodOptions, URL: c.URL}
 			if err := c.WriteRequest(req); err != nil {
-				c.Fire(fmt.Sprintf("[QVR-KEEPALIVE] FAILED #%d: %v", keepaliveCount, err))
 				return
 			}
-			c.Fire(fmt.Sprintf("[QVR-KEEPALIVE] SUCCESS #%d sent", keepaliveCount))
 		case <-ctx.Done():
-			c.Fire(fmt.Sprintf("[QVR-KEEPALIVE] Stopped (sent %d total)", keepaliveCount))
 			return
 		}
 	}
@@ -423,9 +414,6 @@ func (c *Conn) WriteResponse(res *tcp.Response) error {
 			sessionTimeout := 86400 // 24 hours
 			if c.Timeout > 0 {
 				sessionTimeout = c.Timeout
-				c.Fire(fmt.Sprintf("[QVR-FIX] Setting Session timeout=%d (from c.Timeout)", sessionTimeout))
-			} else {
-				c.Fire(fmt.Sprintf("[QVR-DEFAULT] Setting Session timeout=%d (24h default)", sessionTimeout))
 			}
 			res.Header.Set("Session", fmt.Sprintf("%s;timeout=%d", c.session, sessionTimeout))
 		} else {
