@@ -36,6 +36,10 @@ else
     echo "[entrypoint] No /config/keepalived.conf found. Not starting keepalived."
 fi
 
+# 3) Start connection watchdog in background
+echo "[entrypoint] Starting connection watchdog (GO2RTC_MAX_CONSUMERS=${GO2RTC_MAX_CONSUMERS:-15})..."
+/usr/local/bin/connection-watchdog.sh &
+
 # 2) Now start go2rtc in the foreground (so if it fails, container fails)
 echo "[entrypoint] Starting go2rtc in foreground..."
 exec go2rtc -config /config/go2rtc.yaml

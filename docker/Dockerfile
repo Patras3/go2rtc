@@ -40,6 +40,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Copy VRRP notification script (called by keepalived on state changes)
 COPY docker/vrrp_notify.sh /usr/local/bin/vrrp_notify.sh
+
+# Copy connection watchdog script
+COPY docker/connection-watchdog.sh /usr/local/bin/connection-watchdog.sh
+RUN chmod +x /usr/local/bin/connection-watchdog.sh
 RUN chmod +x /usr/local/bin/vrrp_notify.sh
 
 # Set working directory to /config
