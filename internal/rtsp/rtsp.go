@@ -193,6 +193,11 @@ func tcpHandler(conn *rtsp.Conn) {
 			if stream == nil {
 				return
 			}
+			// A repeated DESCRIBE on one TCP connection must not register the
+			// same consumer twice: teardown only removes one registration.
+			if closer != nil {
+				return
+			}
 
 			log.Debug().Str("stream", name).Msg("[rtsp] new consumer")
 

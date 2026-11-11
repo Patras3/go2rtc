@@ -34,6 +34,7 @@ func (c *Conn) Auth(username, password string) {
 }
 
 func (c *Conn) Accept() error {
+	var firstDescribePath string
 	for {
 		req, err := c.ReadRequest()
 		if err != nil {
@@ -62,6 +63,16 @@ func (c *Conn) Accept() error {
 				continue
 			}
 			return FailedAuth
+		}
+
+		// One TCP connection has one RTSP consumer/session. A second DESCRIBE
+		// for another stream must not silently return the first stream's SDP.
+		if req.Method == MethodDescribe && firstDescribePath != "" && req.URL.Path != firstDescribePath {
+			res := &tcp.Response{Status: "400 Bad Request", Request: req}
+			if err = c.WriteResponse(res); err != nil {
+				return err
+			}
+			continue
 		}
 
 		// Receiver: OPTIONS > DESCRIBE > SETUP... > PLAY > TEARDOWN
@@ -156,6 +167,7 @@ func (c *Conn) Accept() error {
 			if err = c.WriteResponse(res); err != nil {
 				return err
 			}
+			firstDescribePath = req.URL.Path
 
 		case MethodSetup:
 			res := &tcp.Response{
